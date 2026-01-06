@@ -6,65 +6,58 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-// Danh sách Model theo thứ tự ưu tiên: Chất lượng -> Tốc độ
+// Giữ nguyên danh sách MODELS của bạn
 const MODELS = [
-  "openai/gpt-oss-120b", // Model chính
-  "openai/gpt-oss-20b", // Model dự phòng
-  "llama-3.3-70b-versatile", // Model thông minh nhất
-  "llama-3.1-8b-instant", // Model nhanh nhất
-  "mixtral-8x7b-32768", // Model dự phòng Dự phòng cuối
+  "openai/gpt-oss-120b",
+  "openai/gpt-oss-20b",
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "mixtral-8x7b-32768",
 ];
 
-// Định nghĩa kiểu dữ liệu trả về
 interface GenerationResult {
   content: string;
   model: string;
 }
 
-// Cập nhật hàm đệ quy để trả về Object thay vì string
+// Hàm gọi AI (được sửa đổi để linh hoạt hơn)
 async function generateWithRetry(
   prompt: string,
+  isJsonMode: boolean = false, // Thêm cờ này để ép trả về JSON khi cần
   modelIndex: number = 0
 ): Promise<GenerationResult> {
   if (modelIndex >= MODELS.length) {
-    throw new Error(
-      "Tất cả các model đều đang bận hoặc gặp lỗi. Vui lòng thử lại sau."
-    );
+    throw new Error("Server quá tải, vui lòng thử lại sau.");
   }
 
   const currentModel = MODELS[modelIndex];
-  console.log(`Attempting with model: ${currentModel} (Index: ${modelIndex})`);
 
   try {
     const completion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content:
-            "Bạn là một trợ lý Vibe Coding chuyên nghiệp. Hãy giải thích ngắn gọn, vui vẻ và tạo ra code mẫu React/Typescript sạch đẹp dựa trên ý tưởng của người dùng. Hãy trả lời bằng Tiếng Việt.",
+          content: isJsonMode
+            ? "Bạn là một API trả về dữ liệu JSON. Chỉ trả về một mảng JSON (JSON Array) chứa các chuỗi String. Không markdown, không giải thích."
+            : "Bạn là một trợ lý Vibe Coding chuyên nghiệp. Hãy giải thích ngắn gọn, vui vẻ và tạo ra code mẫu React/Typescript sạch đẹp.",
         },
-        {
-          role: "user",
-          content: prompt,
-        },
+        { role: "user", content: prompt },
       ],
       model: currentModel,
-      temperature: 0.7,
+      temperature: 0.8, // Tăng nhẹ nhiệt độ để ý tưởng sáng tạo hơn
       max_tokens: 4096,
+      // response_format: { type: "json_object" } // Groq hỗ trợ JSON mode ở một số model, nhưng để an toàn ta xử lý thủ công text
     });
 
-    // TRẢ VỀ CẢ MODEL NAME
     return {
       content: completion.choices[0]?.message?.content || "",
       model: currentModel,
     };
   } catch (error: any) {
+    // Logic retry giữ nguyên
     const status = error?.status || error?.statusCode || 500;
-    console.warn(`Model ${currentModel} failed with status: ${status}`);
-
     if (status === 429 || (status >= 500 && status < 600)) {
-      console.log(`Switching to backup model...`);
-      return generateWithRetry(prompt, modelIndex + 1);
+      return generateWithRetry(prompt, isJsonMode, modelIndex + 1);
     }
     throw error;
   }
@@ -76,8 +69,40 @@ export const handler: Handler = async (event) => {
   }
 
   try {
-    const { prompt } = JSON.parse(event.body || "{}");
+    const { prompt, action } = JSON.parse(event.body || "{}");
 
+    // --- CASE 1: GỢI Ý Ý TƯỞNG (NEW) ---
+    if (action === "suggest") {
+      const suggestPrompt =
+        'Hãy tạo ra 5 ý tưởng project Web App ngắn gọn, thú vị, hiện đại bằng React/Typescript (Ví dụ: Glassmorphism Portfolio, Music Player, Dashboard...). Chỉ trả về Array JSON raw, ví dụ: ["Ý tưởng 1", "Ý tưởng 2"]';
+
+      const { content, model } = await generateWithRetry(
+        suggestPrompt,
+        true,
+        0
+      );
+
+      // Xử lý chuỗi JSON trả về (đôi khi AI bọc trong markdown ```json ... ```)
+      let cleanJson = content.replace(/```json|```/g, "").trim();
+      let ideas = [];
+      try {
+        ideas = JSON.parse(cleanJson);
+      } catch (e) {
+        // Fallback nếu AI trả về lỗi format
+        ideas = [
+          "Portfolio cá nhân 3D",
+          "Todo App kéo thả",
+          "Weather App tối giản",
+        ];
+      }
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ result: ideas, model }),
+      };
+    }
+
+    // --- CASE 2: GENERATE CODE (CŨ) ---
     if (!prompt) {
       return {
         statusCode: 400,
@@ -85,22 +110,17 @@ export const handler: Handler = async (event) => {
       };
     }
 
-    // Destructure kết quả từ hàm đệ quy
-    const { content, model } = await generateWithRetry(prompt, 0);
+    const { content, model } = await generateWithRetry(prompt, false, 0);
 
     return {
       statusCode: 200,
-      // Gửi model name về client
       body: JSON.stringify({ result: content, model: model }),
     };
   } catch (error: any) {
-    console.error("Final Error:", error);
+    console.error("Error:", error);
     return {
       statusCode: 500,
-      body: JSON.stringify({
-        error: error.message || "Lỗi xử lý yêu cầu",
-        details: "Hệ thống đang quá tải, vui lòng thử lại.",
-      }),
+      body: JSON.stringify({ error: error.message }),
     };
   }
 };

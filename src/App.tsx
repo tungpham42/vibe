@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Layout,
   Typography,
@@ -12,6 +12,8 @@ import {
   Col,
   Tag,
   FloatButton,
+  Tooltip,
+  Spin,
 } from "antd";
 import {
   RocketOutlined,
@@ -19,7 +21,9 @@ import {
   BulbOutlined,
   ThunderboltFilled,
   SendOutlined,
-  CheckCircleFilled, // Icon cho model
+  CheckCircleFilled,
+  FireFilled,
+  SyncOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -31,13 +35,50 @@ const { Title, Paragraph, Text } = Typography;
 const { TextArea } = Input;
 
 const App: React.FC = () => {
+  // State cho chức năng chính
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState("");
-
-  // State mới để lưu tên model
   const [usedModel, setUsedModel] = useState("");
 
+  // State cho chức năng gợi ý ý tưởng (AI Generated Ideas)
+  const [ideas, setIdeas] = useState<string[]>([]);
+  const [loadingIdeas, setLoadingIdeas] = useState(false);
+
+  // Hàm gọi API lấy ý tưởng từ Groq
+  const fetchIdeas = async () => {
+    setLoadingIdeas(true);
+    try {
+      const response = await fetch("/.netlify/functions/vibe-check", {
+        method: "POST",
+        body: JSON.stringify({ action: "suggest" }), // Gửi action suggest để backend biết
+      });
+
+      const data = await response.json();
+
+      if (Array.isArray(data.result)) {
+        setIdeas(data.result);
+      } else {
+        // Fallback nếu API trả về lỗi hoặc không đúng định dạng
+        setIdeas([
+          "Portfolio cá nhân phong cách Glassmorphism",
+          "Dashboard Admin Dark Mode",
+          "App Todo List với Drag & Drop",
+        ]);
+      }
+    } catch (error) {
+      console.error("Không lấy được ý tưởng:", error);
+    } finally {
+      setLoadingIdeas(false);
+    }
+  };
+
+  // Lấy ý tưởng ngay khi load trang
+  useEffect(() => {
+    fetchIdeas();
+  }, []);
+
+  // Hàm xử lý khi người dùng bấm Generate Code
   const handleVibeCheck = async () => {
     if (!prompt.trim()) {
       message.warning("Hãy nhập vibe của bạn trước nhé!");
@@ -45,7 +86,7 @@ const App: React.FC = () => {
     }
     setLoading(true);
     setResult("");
-    setUsedModel(""); // Reset model cũ
+    setUsedModel("");
 
     try {
       const response = await fetch("/.netlify/functions/vibe-check", {
@@ -56,7 +97,7 @@ const App: React.FC = () => {
       const data = await response.json();
       if (data.result) {
         setResult(data.result);
-        setUsedModel(data.model); // Lưu tên model từ server
+        setUsedModel(data.model);
         message.success("Vibe check thành công!");
       } else {
         message.error("Có lỗi xảy ra khi kết nối với AI.");
@@ -66,6 +107,15 @@ const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Hàm xử lý khi click vào tag gợi ý
+  const handleIdeaClick = (idea: string) => {
+    setPrompt(idea);
+    message.info({
+      content: "Đã nạp ý tưởng! Bấm Generate để triển khai.",
+      icon: <FireFilled style={{ color: "#764ba2" }} />,
+    });
   };
 
   return (
@@ -133,7 +183,7 @@ const App: React.FC = () => {
             flexDirection: "column",
           }}
         >
-          {/* ... (Giữ nguyên phần Intro và Steps) ... */}
+          {/* Intro Section */}
           <div style={{ margin: "80px 0 60px", textAlign: "center" }}>
             <Title
               level={1}
@@ -159,7 +209,7 @@ const App: React.FC = () => {
             </Paragraph>
           </div>
 
-          {/* Steps Section giữ nguyên */}
+          {/* Steps Section */}
           <Row gutter={[24, 24]} style={{ marginBottom: 60 }}>
             {[
               {
@@ -227,8 +277,7 @@ const App: React.FC = () => {
                 Thử nghiệm ngay
               </Title>
               <Text type="secondary">
-                Nhập ý tưởng của bạn bên dưới (Ví dụ: "Viết component thẻ bài
-                Pokemon")
+                Nhập ý tưởng của bạn hoặc chọn gợi ý từ AI bên dưới.
               </Text>
             </div>
 
@@ -247,8 +296,54 @@ const App: React.FC = () => {
                 rows={5}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Mô tả vibe của bạn ở đây..."
+                placeholder="Mô tả vibe của bạn ở đây... (Ví dụ: Viết component thẻ bài Pokemon)"
               />
+
+              {/* --- KHU VỰC GỢI Ý ĐỘNG (AI Generated Ideas) --- */}
+              <div style={{ marginBottom: 10 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    marginBottom: 8,
+                    gap: 8,
+                  }}
+                >
+                  <Text strong type="secondary" style={{ fontSize: "13px" }}>
+                    <FireFilled style={{ color: "#f59e0b" }} /> Gợi ý từ Groq
+                    AI:
+                  </Text>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<SyncOutlined spin={loadingIdeas} />}
+                    onClick={fetchIdeas}
+                    style={{ fontSize: "12px", color: "#764ba2" }}
+                  >
+                    Đổi mới
+                  </Button>
+                </div>
+
+                {loadingIdeas && ideas.length === 0 ? (
+                  <div style={{ padding: "10px 0", color: "#999" }}>
+                    <Spin size="small" style={{ marginRight: 8 }} />
+                    Đang tìm ý tưởng hay ho...
+                  </div>
+                ) : (
+                  <Space size={[8, 8]} wrap>
+                    {ideas.map((idea, index) => (
+                      <Tooltip title="Sử dụng ý tưởng này" key={index}>
+                        <Tag
+                          className="idea-tag"
+                          onClick={() => handleIdeaClick(idea)}
+                        >
+                          {idea}
+                        </Tag>
+                      </Tooltip>
+                    ))}
+                  </Space>
+                )}
+              </div>
 
               <Button
                 type="primary"
@@ -285,7 +380,6 @@ const App: React.FC = () => {
                     Kết quả:
                   </Title>
 
-                  {/* HIỂN THỊ MODEL NAME TINH TẾ */}
                   {usedModel && (
                     <Tag
                       icon={<CheckCircleFilled />}
